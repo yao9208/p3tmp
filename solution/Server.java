@@ -6,9 +6,12 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.MalformedURLException;
 import java.rmi.*;
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.List;
 
 
 
@@ -54,23 +57,31 @@ public class Server extends UnicastRemoteObject implements AppService{
 
 		int i=0;
 		if(ismaster){
-			while(i<instances-2){
-				startAppServer(ms);
-				i++;
-			}
-
+			Runnable r1 = new Runnable(){
+				public void run(){
+					long startTime=System.currentTimeMillis();
+					long curTime;
+					while (true) {
+						Cloud.FrontEndOps.Request r = SL.getNextRequest();
+						SL.processRequest( r );
+						curTime = System.currentTimeMillis();
+						if(curTime-startTime>=9000){
+							break;
+						}
+					}
+				}
+			};
+			Thread thr = new Thread(r1);
+			thr.start();
 			Runnable r2 = new Runnable(){
 				public void run(){
-					//System.out.println("thread 2");
 					try {
-						System.out.println("thread2 sleep 5s...");
-						Thread.sleep(3000);
+						Thread.sleep(5000);
 					} catch (InterruptedException e) {
 						e.printStackTrace();
 					}
 					LinkedList<Integer> list = new LinkedList<Integer>();
 					while(true){
-						//System.out.println("thread 2");
 						list.add(ms.queueLength());
 						if(list.size()>=5){
 							int sum=0;
@@ -83,11 +94,11 @@ public class Server extends UnicastRemoteObject implements AppService{
 							for(int i=1; i<5; i++){
 								sum+=list.get(i-1)-list.get(i);
 							}
-							if(flag && sum<=0 && ms.middleList.size()<15){
+							if(flag && sum<=0){
 								System.out.println("READY TO ADD SERVER ");
 								startAppServer(ms);
 							}
-							if(!flag &&(ms.middleList.size()>3)){
+							if(!flag &&(ms.middleList.size()>2)){
 								for(int n:ms.middleList){
 									System.out.print(n+"-");
 								}
@@ -96,6 +107,7 @@ public class Server extends UnicastRemoteObject implements AppService{
 								try {
 									shutdownServer(serverid, ip, port);
 								} catch (Exception e) {
+									// TODO Auto-generated catch block
 									e.printStackTrace();
 								}
 							}
@@ -111,7 +123,12 @@ public class Server extends UnicastRemoteObject implements AppService{
 			};
 			Thread th2= new Thread(r2);
 			th2.start();
-						
+			int middle=0;
+			while(i<instances-2){
+				startAppServer(ms);
+				i++;
+			}
+			
 		}
 		if(role==1){
 			byte[] byteReq;
@@ -124,8 +141,7 @@ public class Server extends UnicastRemoteObject implements AppService{
 			}else{
 				int tmp=0;
 				long startTime=System.currentTimeMillis();
-				while (true) {	
-					//System.out.println("main thread");
+				while (true) {					
 					long curTime;					
 					curTime = System.currentTimeMillis();
 					if(curTime-startTime>=5000){
@@ -135,13 +151,13 @@ public class Server extends UnicastRemoteObject implements AppService{
 						Cloud.FrontEndOps.Request r = SL.getNextRequest();
 						SL.drop(r);
 					}
-					Thread.sleep(2);
+				
 				}
 			}
 		}
 		if(role==2){
 			aps = new Server();
-			//Registry registry = LocateRegistry.getRegistry(ip, Integer.parseInt(port));
+			Registry registry = LocateRegistry.getRegistry();
 			try {
 				System.out.println("binding server"+middleNo);
 				Naming.bind("//"+ip+":"+port+"/server"+middleNo, aps);
@@ -176,9 +192,9 @@ public class Server extends UnicastRemoteObject implements AppService{
 		int id = SL.startVM();
 		int[] tmp = {2, curMidIdx};
 		ms.roleList.add(tmp);
-		ms.middleList.add(curMidIdx++);		
+		ms.middleList.add(curMidIdx++);
+		
 	}
-	
 	public static void startFrontServer(Master ms){
 		SL.startVM();
 		int[] tmp = {1, 0};
@@ -206,7 +222,7 @@ public class Server extends UnicastRemoteObject implements AppService{
 		AppService service = (AppService) Naming.lookup("//"+ip+":"+port+"/server"+id);
 		service.shutDownServer();
 	}
-
+	@Override
 	public void shutDownServer() throws RemoteException {
 		// TODO Auto-generated method stub
 		System.out.println("SHUT DOWN--------");
@@ -243,7 +259,7 @@ class Master extends UnicastRemoteObject implements Service{
 	}
 	public boolean isMaster() throws AccessException, RemoteException, AlreadyBoundException{
 		//Master ms = (Master) UnicastRemoteObject.exportObject(this, 0);
-		//Registry registry = LocateRegistry.getRegistry(ip, Integer.parseInt(port));
+		Registry registry = LocateRegistry.getRegistry();
 		try {
 			//registry.bind("//127.0.1.1:15640/master", (Remote) this);
 			Naming.bind("//"+ip+":"+port+"/master", this);
