@@ -62,13 +62,12 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 
 		int i=0;
 		if(ismaster){
-			
+			startFrontServer(ms);
 			while(i<instances){
 				startAppServer(ms);
 				i++;
 			}
 			
-
 			Runnable r2 = new Runnable(){
 				public void run(){
 					try {
@@ -87,7 +86,7 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 						int queueLength = ms.queueLength();
 						int middlenum = ms.middleList.size();
 						int frontnum = ms.frontlist.size();
-						if(queueLength>=middlenum && middlenum<15){
+						if(queueLength>=middlenum && middlenum<9){
 							miduptimes++;
 							if(queueLength<2*middlenum){
 								urgent = false;
@@ -102,7 +101,7 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 								miduptimes=0;
 							}
 						}
-						if(SL.getQueueLength()>=1.7*frontnum && frontnum<5 && (curTime-lasttime)>2000 &&(curTime-startTime)>5000){
+						if(SL.getQueueLength()*(frontnum+1)>=1 && frontnum<3 && (curTime-lasttime)>2000 &&(curTime-startTime)>5000){
 							//System.out.println(ms.frontlist.size());
 							frontuptimes++;
 							if(frontuptimes>=1){
@@ -112,7 +111,7 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 								frontuptimes=0;
 							}
 						}
-						if(queueLength<(middlenum-1) && (curTime-startTime)>16000){
+						if(queueLength<(middlenum-1) && (curTime-startTime)>13000){
 							middowntimes++;
 							if(middowntimes>=20){
 								int serverid = ms.middleList.remove();
@@ -125,11 +124,11 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 								middowntimes=0;
 							}
 						}
-						if(SL.getQueueLength()<(frontnum) && (curTime-startTime)>16000){
+						if(SL.getQueueLength()*frontnum<1 && (curTime-startTime)>13000){
 							frontdowntimes++;
 							if(frontdowntimes>=15){
 								int serverid = ms.frontlist.remove();
-								System.out.println("READY TO REMOVE FRONT SERVER"+serverid);
+								System.out.println("REMOVE FRONT SERVER"+serverid);
 								try {
 									shutdownServer(serverid, ip, port);
 								} catch (Exception e) {
@@ -144,12 +143,10 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 						} catch (InterruptedException e) {
 							e.printStackTrace();
 						}
-						while(ms.queueLength()>2*ms.middleList.size()){
-							Cloud.FrontEndOps.Request r = SL.getNextRequest();
-							SL.drop(r);
+						while(ms.queueLength()>3*ms.middleList.size()){
+							SL.dropHead();
 //								byte[] arr = ms.reqQueue.remove();
-//								dropReq(arr);
-							
+//								dropReq(arr);							
 						}
 						frontuptimes=0;
 					}
@@ -171,7 +168,7 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 				}
 				SL.register_frontend();
 				while (true) {
-					byteReq = getReqBytes();
+					byteReq = getReqWithTime();
 					master.pushRequst(byteReq);
 				}
 			}else{
@@ -179,8 +176,8 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 				while (true) {	
 					long curTime;					
 					curTime = System.currentTimeMillis();
-					if(curTime-startTime>=3000){
-						byteReq = getReqBytes();
+					if(curTime-startTime>=5000){
+						byteReq = getReqWithTime();
 						ms.pushRequst(byteReq);
 					}else{
 						Cloud.FrontEndOps.Request r = SL.getNextRequest();
@@ -209,52 +206,25 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 				processReq(req, db);//already handle null
 			}
 		}
-//		if(role==3){
-//			aps = new Server();
-//			Naming.bind("//"+ip+":"+port+"/DBserver", aps);
-//			DB = SL.getDB();
-//			cache = new HashMap<String, String>();
-//			//Thread.sleep(30000);
-//		}
 	}
 	
-	
-	public static void processReq(byte[] bytes, Cloud.DatabaseOps db) throws IOException, ClassNotFoundException{
-		if(bytes==null){
-			return;
-		}
-		ByteArrayInputStream b = new ByteArrayInputStream(bytes);
-        ObjectInputStream o = new ObjectInputStream(b);
-        Cloud.FrontEndOps.Request r = (Cloud.FrontEndOps.Request)o.readObject();
-        //System.out.println("processReq: "+r.toString());
-        o.close();
-        SL.processRequest(r, db);
-	}
+
 	public static void processReq(ReqAndTime req, Cloud.DatabaseOps db) throws IOException, ClassNotFoundException{
 		if(req==null){
 			return;
 		}
 		long time = System.currentTimeMillis();
-		if(req.r.isPurchase && (time-req.timestamp)>1860){
+		if(req.r.isPurchase && (time-req.timestamp)>1810){
 			SL.drop(req.r);
 			return;
-		}else if((time-req.timestamp)>860){
+		}else if((time-req.timestamp)>850){
 			SL.drop(req.r);
 			return;
 		}
         SL.processRequest(req.r, db);
 	}
 	
-	public static void dropReq(byte[] bytes) throws IOException, ClassNotFoundException{
-		if(bytes==null){
-			return;
-		}
-		ByteArrayInputStream b = new ByteArrayInputStream(bytes);
-        ObjectInputStream o = new ObjectInputStream(b);
-        Cloud.FrontEndOps.Request r = (Cloud.FrontEndOps.Request)o.readObject();
-        //System.out.println("processReq: "+r.toString());
-        SL.drop(r);
-	}
+
 	public static void startAppServer(Master ms){
 		int id = SL.startVM();
 		int[] tmp = {2, curserverIdx};
@@ -273,12 +243,6 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 		SL.startVM();
 		int[] tmp = {3, 0};
 		ms.roleList.add(tmp);
-	}
-
-	public static ReqAndTime getReqBytes() throws IOException {
-		Cloud.FrontEndOps.Request r = SL.getNextRequest();
-		ReqAndTime arr = new ReqAndTime(r, System.currentTimeMillis());
-		return arr;
 	}
 	
 	public static ReqAndTime getReqWithTime(){
@@ -363,9 +327,9 @@ class Master extends UnicastRemoteObject implements Service{
 			while (!reqQueue.isEmpty()) {
 				req = reqQueue.remove();
 				time = System.currentTimeMillis();
-				if(req.r.isPurchase && (time-req.timestamp)>1700){
+				if(req.r.isPurchase && (time-req.timestamp)>1780){
 					SL.drop(req.r);
-				}else if ((time-req.timestamp)>700){
+				}else if ((time-req.timestamp)>830){
 					SL.drop(req.r);
 				}
 				else{
@@ -377,7 +341,7 @@ class Master extends UnicastRemoteObject implements Service{
 	}
 	
 	public int[] getRole() throws RemoteException {
-		// TODO Auto-generated method stub
+		// TODO Auto-generated method stub 
 		int role=0, middleNo=0;
 		if(roleList.size()!=0){
 			role = roleList.get(0)[0];
