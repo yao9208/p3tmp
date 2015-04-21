@@ -7,5 +7,5 @@ public interface Service extends Remote{
 	public int[] getMiddleServerList() throws RemoteException;
 	//public void pushRequst(byte[] req) throws RemoteException;
 	public ReqAndTime getReqWithTime() throws RemoteException, IOException;
-	public void pushRequst(ReqAndTime req) throws RemoteException;
+	public void pushRequst(ReqAndTime req, int server, int length) throws RemoteException;
 }

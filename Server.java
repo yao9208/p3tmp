@@ -8,7 +8,11 @@ import java.rmi.*;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.Map;
+import java.util.Map.Entry;
 
 
 public class Server extends UnicastRemoteObject implements AppService, Cloud.DatabaseOps{
@@ -24,6 +28,7 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 	static boolean shutSignal=false;
 	static HashMap<String, String> cache;
 	static Cloud.DatabaseOps DB;
+	static long interval;
 	protected Server() throws RemoteException {
 		super();
 		// TODO Auto-generated constructor stub
@@ -62,11 +67,15 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 
 		int i=0;
 		if(ismaster){
+			if(SL.getTime()==20){
+				instances=5;
+			}
 			startFrontServer(ms);
 			while(i<instances){
 				startAppServer(ms);
 				i++;
 			}
+			
 			
 			Runnable r2 = new Runnable(){
 				public void run(){
@@ -78,44 +87,74 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 					}
 					int miduptimes=0, middowntimes=0;
 					int frontuptimes=0, frontdowntimes=0;
-					long lasttime=0;
+					long lasttime=0, lastmidtime=0, lastjudge=0;
+					int prevLength=0,sumlen=0;
+					double sum=0.0, alpha=1.0;
+					int time=0;
 					while(true){
 						long curTime;					
-						curTime = System.currentTimeMillis();
-						boolean urgent=true;
+						curTime = System.currentTimeMillis();						
+						//boolean urgent=true;
 						int queueLength = ms.queueLength();
+						int frontqueueLength = ms.frontQueueLength();
 						int middlenum = ms.middleList.size();
 						int frontnum = ms.frontlist.size();
-						if(queueLength>=middlenum && middlenum<9){
+						boolean first=true;
+						if(queueLength>=middlenum && middlenum<10 &&(curTime-lastmidtime)>6000){
 							miduptimes++;
-							if(queueLength<2*middlenum){
-								urgent = false;
-							}
-							if(miduptimes>=3){
-								System.out.println("ADD APP SERVER"+curserverIdx);
-								startAppServer(ms);
-								if(urgent){
-									System.out.println("ADD APP SERVER "+curserverIdx);
+							sum += queueLength;
+							if(miduptimes>=5){
+								double bootnum=(sum/miduptimes/(middlenum*0.5));
+								bootnum = (first)? bootnum-1:bootnum*0.7;
+								System.out.println(sum+" scale "+bootnum);
+								for (int j = 0; j < bootnum && ms.middleList.size()<10; j++) {
+									System.out.print("ADD APP SERVER"
+											+ curserverIdx);
+									System.out.println(" time: "+(System.currentTimeMillis()-startTime));
 									startAppServer(ms);
 								}
+								if(first){
+									first=false;
+								}
+								lastmidtime=curTime;
 								miduptimes=0;
+								sum=0;
+								alpha*=1;
 							}
+						}else if(queueLength<middlenum){
+							miduptimes=0;
 						}
-						if(SL.getQueueLength()*(frontnum+1)>=1 && frontnum<3 && (curTime-lasttime)>2000 &&(curTime-startTime)>5000){
+						//System.out.println("frontnum: "+ms.frontlist.size()+" length: "+frontqueueLength);
+						if(frontqueueLength>=(frontnum+1)*0.5 && frontnum<3 && (curTime-lasttime)>6000 &&(curTime-startTime)>3000){
 							//System.out.println(ms.frontlist.size());
 							frontuptimes++;
-							if(frontuptimes>=1){
-								System.out.println("ADD FRONT SERVER "+curserverIdx);
+							if(frontuptimes>=1 && frontqueueLength<2*(frontnum+1)){
+								System.out.println("length: "+frontqueueLength);
+								System.out.print("ADD FRONT SERVER "+curserverIdx);
+								System.out.println(" time: "+(System.currentTimeMillis()-startTime));
 								startFrontServer(ms);
+								lasttime = curTime;
+								frontuptimes=0;
+							}else if(frontuptimes>=1){
+								
+
+								for(int i=0; i<frontqueueLength/(frontnum+1)/5 && i<3; i++) {
+									System.out.println("ADD FRONT SERVER "
+											+ curserverIdx);
+									startFrontServer(ms);
+								}
 								lasttime = curTime;
 								frontuptimes=0;
 							}
 						}
-						if(queueLength<(middlenum-1) && (curTime-startTime)>13000){
+						
+						if(queueLength<(middlenum-1) && (curTime-startTime)>13000 &&(curTime-lastmidtime)>6800){
 							middowntimes++;
-							if(middowntimes>=20){
+							if(middowntimes>=35){
 								int serverid = ms.middleList.remove();
-								System.out.println("REMOVE APP SERVER"+serverid);
+								lastmidtime=curTime;
+								System.out.print("REMOVE APP SERVER"+serverid);
+								System.out.println(" time: "+(System.currentTimeMillis()-startTime));
 								try {
 									shutdownServer(serverid, ip, port);
 								} catch (Exception e) {
@@ -123,38 +162,71 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 								}
 								middowntimes=0;
 							}
+						}else if(queueLength>=(middlenum-1)){
+							middowntimes=0;
 						}
-						if(SL.getQueueLength()*frontnum<1 && (curTime-startTime)>13000){
-							frontdowntimes++;
-							if(frontdowntimes>=15){
-								int serverid = ms.frontlist.remove();
-								System.out.println("REMOVE FRONT SERVER"+serverid);
-								try {
-									shutdownServer(serverid, ip, port);
-								} catch (Exception e) {
-									e.printStackTrace();
-								}
-								frontdowntimes=0;
+//						if(frontqueueLength<=frontnum && (curTime-lasttime)>3000 && (curTime-startTime)>16000){
+//							frontdowntimes++;
+//							if(frontdowntimes>=25){
+//								int serverid = ms.frontlist.remove();
+//								lasttime = curTime;
+//								System.out.println("REMOVE FRONT SERVER"+serverid);
+//								try {
+//									shutdownServer(serverid, ip, port);
+//								} catch (Exception e) {
+//									e.printStackTrace();
+//								}
+//								frontdowntimes=0;
+//							}
+//						}else if(frontqueueLength>frontnum){
+//							frontdowntimes=0;
+//						}
+						int curLength = SL.getQueueLength();
+						int diff = curLength-prevLength;
+						sumlen+=diff;
+						time=time+1;
+						prevLength=curLength;
+						//System.out.println(time);
+						if(time>=4 && (curTime-lastjudge)>3000 && ms.frontlist.size()<3){
+							int num = sumlen;
+							for(int i=0; i<num/2 && ms.frontlist.size()<3; i++){
+								System.out.print("ADD FRONT SERVER "+curserverIdx);
+								System.out.println(" time: "+(System.currentTimeMillis()-startTime));
+								startFrontServer(ms);
 							}
+//							for(int i=0; i<num; i++){
+//								System.out.println("ADD APP SERVER" + curserverIdx);
+//								startAppServer(ms);
+//							}
+							time=0;
+							sumlen=0;
+							lastjudge=curTime;
+							//lasttime=curTime; lastmidtime=curTime;
 						}
 						
 						try {
-							Thread.sleep(200);
+							Thread.sleep(100);
 						} catch (InterruptedException e) {
 							e.printStackTrace();
 						}
-						while(ms.queueLength()>3*ms.middleList.size()){
-							SL.dropHead();
-//								byte[] arr = ms.reqQueue.remove();
-//								dropReq(arr);							
-						}
+//						while(ms.queueLength()>2.5*ms.middleList.size()){
+//							//System.out.println("length drop");
+//							SL.dropHead();
+//							try {
+//								Thread.sleep(2);
+//							} catch (InterruptedException e) {
+//								// TODO Auto-generated catch block
+//								//e.printStackTrace();
+//							}
+////								byte[] arr = ms.reqQueue.remove();
+////								dropReq(arr);							
+//						}
 						frontuptimes=0;
 					}
 				}
 			};
 			Thread th2= new Thread(r2);
 			th2.start();
-						
 		}
 		if(role==1){
 			ReqAndTime byteReq;
@@ -169,19 +241,23 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 				SL.register_frontend();
 				while (true) {
 					byteReq = getReqWithTime();
-					master.pushRequst(byteReq);
+					master.pushRequst(byteReq, serverNo, SL.getQueueLength());
 				}
 			}else{
-				int tmp=0;				
+				int tmp=0;		
+				long prevTime=System.currentTimeMillis();
 				while (true) {	
 					long curTime;					
 					curTime = System.currentTimeMillis();
 					if(curTime-startTime>=5000){
+						interval = curTime-prevTime;
+						prevTime=curTime;
 						byteReq = getReqWithTime();
-						ms.pushRequst(byteReq);
+						ms.pushRequst(byteReq, 0, SL.getQueueLength());						
 					}else{
-						Cloud.FrontEndOps.Request r = SL.getNextRequest();
-						SL.drop(r);
+//						Cloud.FrontEndOps.Request r = SL.getNextRequest();
+//						SL.drop(r);
+						SL.dropHead();
 					}
 					Thread.sleep(2);
 				}
@@ -213,15 +289,9 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 		if(req==null){
 			return;
 		}
-		long time = System.currentTimeMillis();
-		if(req.r.isPurchase && (time-req.timestamp)>1810){
-			SL.drop(req.r);
-			return;
-		}else if((time-req.timestamp)>850){
-			SL.drop(req.r);
-			return;
-		}
+		
         SL.processRequest(req.r, db);
+        
 	}
 	
 
@@ -255,6 +325,9 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 	public static void shutdownServer(int id, String ip, String port) throws MalformedURLException, RemoteException, NotBoundException{		
 		AppService service = (AppService) Naming.lookup("//"+ip+":"+port+"/server"+id);
 		service.shutDownServer();
+		if(ms.frontlist.contains(id)){
+			ms.frontlist.remove(id);
+		}
 	}
 
 	public void shutDownServer() throws RemoteException {
@@ -276,6 +349,7 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 		}
 		String val = DB.get(key);
 		cache.put(key, val);
+		//ms.set.add(key);
 		return val;
 	}
 	@Override
@@ -301,6 +375,8 @@ class Master extends UnicastRemoteObject implements Service{
 	LinkedList<Integer> middleList;
 	LinkedList<Integer> frontlist;
 	LinkedList<ReqAndTime> reqQueue;
+	HashMap<Integer, Integer> lengthList;
+	//HashSet<String> set;
 
 	protected Master(String ip, String port, ServerLib SL) throws RemoteException {
 		super();
@@ -311,6 +387,8 @@ class Master extends UnicastRemoteObject implements Service{
 		this.frontlist = new LinkedList<Integer>();
 		this.reqQueue = new LinkedList<ReqAndTime>();
 		roleList = new  ArrayList<int[]>();
+		lengthList = new HashMap<Integer, Integer>();
+		//set = new HashSet<String>();
 	}
 	public boolean isMaster() throws AccessException, RemoteException, AlreadyBoundException{
 		try {
@@ -327,9 +405,12 @@ class Master extends UnicastRemoteObject implements Service{
 			while (!reqQueue.isEmpty()) {
 				req = reqQueue.remove();
 				time = System.currentTimeMillis();
-				if(req.r.isPurchase && (time-req.timestamp)>1780){
+				//System.out.println("time: "+(System.currentTimeMillis()-req.timestamp));
+				if(req.r.isPurchase && (time-req.timestamp)>795){
+					System.out.println("get purchase drop");
 					SL.drop(req.r);
-				}else if ((time-req.timestamp)>830){
+				}else if ((time-req.timestamp)>795){
+					System.out.println("get browse drop");
 					SL.drop(req.r);
 				}
 				else{
@@ -363,8 +444,9 @@ class Master extends UnicastRemoteObject implements Service{
 		return result;
 	}
 	@Override
-	public void pushRequst(ReqAndTime req) throws RemoteException {
-		reqQueue.add(req);		
+	public void pushRequst(ReqAndTime req, int server, int length) throws RemoteException {
+		reqQueue.add(req);	
+		lengthList.put(server, length);
 	}
 	public int queueLength(){
 		return reqQueue.size();
@@ -373,6 +455,15 @@ class Master extends UnicastRemoteObject implements Service{
 	public ReqAndTime getReqFromFrontEnd() throws RemoteException, IOException {
 		// TODO Auto-generated method stub
 		return null;
+	}
+	public int frontQueueLength(){
+		int sum=0;
+		Iterator<Entry<Integer, Integer>> it = lengthList.entrySet().iterator();
+		while(it.hasNext()){
+			Entry<Integer, Integer> entry = (Map.Entry<Integer, Integer>) it.next();
+			sum += entry.getValue();
+		}
+		return sum;
 	}
 
 }
