@@ -131,6 +131,7 @@ public class Server extends UnicastRemoteObject implements AppService, Cloud.Dat
 								frontuptimes=0;
 							}
 						}
+						     
 						
 						
 						sumlen+=ms.sumTime();
